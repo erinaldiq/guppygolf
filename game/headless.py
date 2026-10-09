@@ -44,7 +44,7 @@ def play_turn(cfg, state, kx, ky, s, n_steps, detector_cells=()):
 
 def main():
     cfg = DEFAULT
-    st = State(lie=(8, 8), strokes=0, hole_idx=0)
+    st = State(lie=cfg.tee, strokes=0, hole_idx=0)
     cells = course.pick_detector_cells(cfg, np.random.default_rng(0), st.lie)
     while st.strokes < cfg.max_strokes:
         r, st = play_turn(

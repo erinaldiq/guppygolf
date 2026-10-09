@@ -1,7 +1,6 @@
 from dataclasses import dataclass
 import numpy as np
 from pathlib import Path
-from guppylang.emulator.state import NotSingleStateError, PartialVector
 from selene_quest_plugin.state import SeleneQuestState
 from guppylang import guppy
 from guppylang.std.builtins import array, comptime, output
@@ -100,7 +99,7 @@ def build_course(cfg, detector_cells, n_steps=None, warmup=False):
     period = cfg.detector_period
     offset = cfg.detector_offset
     detector_cells = tuple(tuple(c) for c in detector_cells)
-    conditions = point_conditions(detector_cells, n)
+    conditions = point_conditions(detector_cells, n, tile=cfg.detector_tile)
     K = 2**n - 1
     structure = prep_structure(n)
 
@@ -233,12 +232,25 @@ def build_course(cfg, detector_cells, n_steps=None, warmup=False):
     return course
 
 
-def _snapshot_amp(vec, N):
-    try:
-        amp = np.asarray(vec.as_single_state(), dtype=complex)
-    except NotSingleStateError:
-        dist = vec.state_distribution()
-        amp = np.asarray(max(dist, key=lambda d: d.probability).state, dtype=complex)
+def _specified_matrix(state):
+    tensor = np.asarray(state.state).reshape([2] * state.total_qubits)
+    spec = list(state.specified_qubits)
+    lhs, rhs = [], [-1] * len(spec)
+    for qubit_id, bit_index in enumerate(reversed(range(state.total_qubits))):
+        if qubit_id in spec:
+            rhs[spec.index(qubit_id)] = bit_index
+        else:
+            lhs.append(bit_index)
+    permuted = np.transpose(tensor, lhs + rhs)
+    return permuted.reshape(2 ** len(lhs), 2 ** len(spec))
+
+
+def _snapshot_amp(state, N):
+    _, _, vh = np.linalg.svd(_specified_matrix(state), full_matrices=False)
+    amp = vh[0]
+    nz = np.flatnonzero(np.abs(amp) > 1e-12)
+    if len(nz):
+        amp = amp * np.conj(amp[nz[0]] / abs(amp[nz[0]]))
     return amp.reshape(N, N)
 
 
@@ -355,7 +367,7 @@ def stream_turn(course, params, seed=1):
                     hole = int(value)
                 elif tag == "STATE:snap":
                     state = SeleneQuestState.parse_from_file(Path(value), cleanup=True)
-                    amp = _snapshot_amp(PartialVector._from_inner(state), N)
+                    amp = _snapshot_amp(state, N)
                     yield StepFrame(
                         prob=np.abs(amp) ** 2,
                         phase=stabilized_phase(amp),

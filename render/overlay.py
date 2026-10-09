@@ -8,6 +8,32 @@ from game import course
 from render.coords import grid_to_px
 
 
+def contour_levels(V, n=7, lo=12, hi=88, min_gap=0.02, top=None):
+    V = np.asarray(V, float)
+    vmin, vmax = V.min(), V.max()
+    ceiling = vmax if top is None else min(top, vmax)
+    below = V[V < ceiling] if np.any(V < ceiling) else V
+    out = []
+    for lvl in np.percentile(below, np.linspace(lo, hi, n)):
+        if vmin < lvl < ceiling and (not out or lvl - out[-1] > min_gap * (ceiling - vmin)):
+            out.append(float(lvl))
+    if top is not None and vmax >= top:
+        out.append(float(top - 0.01 * (top - vmin)))
+    return out
+
+
+_HEIGHT_STOPS = ((0.0, (40, 70, 150)), (0.5, (110, 150, 215)), (1.0, (225, 240, 255)))
+
+
+def height_color(t):
+    t = min(max(float(t), 0.0), 1.0)
+    for (t0, c0), (t1, c1) in zip(_HEIGHT_STOPS, _HEIGHT_STOPS[1:]):
+        if t <= t1:
+            u = (t - t0) / (t1 - t0)
+            return tuple(int(round(a + (b - a) * u)) for a, b in zip(c0, c1))
+    return _HEIGHT_STOPS[-1][1]
+
+
 def hud_text(cfg, st, gate_shown, gate_target, speed, computing):
     if computing:
         gates_line = f"gates {int(gate_shown):,}"
@@ -17,7 +43,7 @@ def hud_text(cfg, st, gate_shown, gate_target, speed, computing):
         gates_line = "circuit  --"
     speed_str = f"   speed {speed:g}x" if speed != 1.0 else ""
     return (
-        f"stroke {st.strokes}/{cfg.max_strokes}\n"
+        f"course {st.stage + 1}/{st.n_stages}  stroke {st.strokes}/{cfg.max_strokes}  total {st.score}\n"
         f"steps {st.n_steps}   squash {st.s:.2f}{speed_str}\n"
         f"{gates_line}\n"
         f"{st.message}"
@@ -46,22 +72,27 @@ class Overlay:
         self._pulse = 0
         self._contour_batch = self._build_contours(cfg, size)
 
+    def rebuild(self, cfg):
+        self.cfg = cfg
+        self._contour_batch = self._build_contours(cfg, self.size)
+
     def _build_contours(self, cfg, size):
         self._contour_lines = {}
         batches = {}
         for h in range(len(cfg.burrows)):
             V = np.asarray(course.build_potential(cfg, h))
+            levels = contour_levels(V, top=course.terrain_top(cfg))
+            lo, hi = levels[0], levels[-1]
             gen = contour_generator(z=V.T)
             batch = pyglet.graphics.Batch()
             refs = []
-            for lvl in np.percentile(V, np.linspace(12, 88, 7)):
+            for lvl in levels:
+                col = height_color((lvl - lo) / (hi - lo) if hi > lo else 1.0)
                 for line in gen.lines(float(lvl)):
                     px = [grid_to_px(cfg, size, v[0], v[1])[:2] for v in line]
                     for (ax, ay), (bx2, by2) in zip(px[:-1], px[1:]):
-                        ln = shapes.Line(
-                            ax, ay, bx2, by2, thickness=1, color=(150, 160, 190), batch=batch
-                        )
-                        ln.opacity = 90
+                        ln = shapes.Line(ax, ay, bx2, by2, thickness=1, color=col, batch=batch)
+                        ln.opacity = 130
                         refs.append(ln)
             batches[h] = batch
             self._contour_lines[h] = refs
@@ -85,9 +116,10 @@ class Overlay:
         prims = []
 
         col = (255, 60, 60) if flash else (40, 200, 220)
+        t = cfg.detector_tile
         for (dj, dk) in getattr(st, "detector_cells", ()):
             dx0, dy0, _cell = grid_to_px(cfg, size, dj - 0.5, dk - 0.5)
-            dx1, dy1, _ = grid_to_px(cfg, size, dj + 0.5, dk + 0.5)
+            dx1, dy1, _ = grid_to_px(cfg, size, dj + t - 0.5, dk + t - 0.5)
             prims.append(shapes.Box(dx0, dy0, dx1 - dx0, dy1 - dy0, thickness=2, color=col))
 
         cj, ck, r = course.hole_region(cfg, hole_idx)

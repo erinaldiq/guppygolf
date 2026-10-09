@@ -7,6 +7,7 @@ import numpy as np
 import pyglet
 from render.coords import px_to_grid
 from game.mechanics import (
+    start_course,
     sample_landing,
     resolve,
     gate_count,
@@ -62,10 +63,20 @@ def build_params(cfg, st):
 
 
 class Loop:
-    def __init__(self, cfg, size=(768, 820), course_builder=None):
-        self.cfg = cfg
-        self.st = GameState(n_steps=cfg.n_steps_default)
+    def __init__(self, cfg, size=(768, 820), course_builder=None, tee_rng=None, courses=None):
+
+        self.courses = tuple(courses) if courses else (cfg,)
+        self.cfg = cfg = self.courses[0]
+
+        for c in self.courses[1:]:
+            assert (c.grid_n, c.field_gamma, c.field_gain, c.fog_floor, c.fog_pmin, c.bloom_threshold, c.bloom_intensity) == (
+                cfg.grid_n, cfg.field_gamma, cfg.field_gain, cfg.fog_floor, cfg.fog_pmin, cfg.bloom_threshold, cfg.bloom_intensity
+            ), "every course of a round must share the grid and the display tuning"
+        self.st = GameState(n_steps=cfg.n_steps_default, n_stages=len(self.courses))
         self._detector_rng = np.random.default_rng()
+
+        self._tee_rng = np.random.default_rng() if tee_rng is None else tee_rng
+        start_course(cfg, self.st, 0, self._tee_rng)
         self.result = None
         self._frame = 0
         self._size = size
@@ -83,7 +94,7 @@ class Loop:
         self._gate_shown = 0.0
         self._speed = 1.0
         self.st.detector_cells = course.pick_detector_cells(
-            cfg, self._detector_rng, self.st.lie
+            cfg, self._detector_rng, self.st.lie, avoid=cfg.tees
         )
 
 
@@ -119,7 +130,8 @@ class Loop:
         gj, gk = px_to_grid(self.cfg, self._size, px, py)
         dx, dy = gj - self.st.lie[0], gk - self.st.lie[1]
         d = math.hypot(dx, dy) or 1.0
-        mag = min(d / 6.0, 1.0) * self.cfg.k_max
+        full = 0.375 * self.cfg.grid_n
+        mag = min(d / full, 1.0) * self.cfg.k_max
         self.st.kx, self.st.ky = mag * dx / d, mag * dy / d
 
     def on_squash(self, sy):
@@ -136,15 +148,16 @@ class Loop:
             self._abort.set()
         pyglet.clock.unschedule(self._poll_compute)
         pyglet.clock.unschedule(self._tick)
-        self.st = GameState(
-            n_steps=self.cfg.n_steps_default
-        )
+        self.cfg = self.courses[0]
+        self.st = GameState(n_steps=self.cfg.n_steps_default, n_stages=len(self.courses))
+        start_course(self.cfg, self.st, 0, self._tee_rng)
+        self._walsh_counts = walsh_term_counts(self.cfg)
         self.result = None
         self._future = None
         self._gate_target = 0
         self._gate_shown = 0.0
         self.st.detector_cells = course.pick_detector_cells(
-            self.cfg, self._detector_rng, self.st.lie
+            self.cfg, self._detector_rng, self.st.lie, avoid=self.cfg.tees
         )
 
 
@@ -193,6 +206,23 @@ class Loop:
             )
         elif self.st.phase == Phase.SIMULATING:
             self._stop_at(self._frame)
+        elif self.st.phase in (Phase.WIN, Phase.LOSE) and self.st.stage + 1 < self.st.n_stages:
+            self._next_course()
+
+    def _next_course(self):
+        self.cfg = self.courses[self.st.stage + 1]
+        self.result = None
+        self._future = None
+        self._gate_target = 0
+        self._gate_shown = 0.0
+        start_course(self.cfg, self.st, self.st.stage + 1, self._tee_rng)
+        self._walsh_counts = walsh_term_counts(self.cfg)
+        self.st.detector_cells = course.pick_detector_cells(
+            self.cfg, self._detector_rng, self.st.lie, avoid=self.cfg.tees
+        )
+        if self._course_future is not None:
+            self._course_future.cancel()
+        self._submit_course_build()
 
 
     def _poll_compute(self, dt):
@@ -260,6 +290,8 @@ class Loop:
 
 
     def render(self, field_renderer, overlay, window, bloom):
+        if overlay.cfg is not self.cfg:
+            overlay.rebuild(self.cfg)
         self._size = window.size
         st = self.st
         if st.phase == Phase.SIMULATING:

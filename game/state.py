@@ -2,6 +2,8 @@
 from dataclasses import dataclass
 from enum import Enum, auto
 
+from config import DEFAULT
+
 
 class Phase(Enum):
     AIMING = auto()
@@ -15,11 +17,10 @@ class Phase(Enum):
 
 @dataclass
 class GameState:
-    lie: tuple = (
-        13,
-        13,
-    )
+    lie: tuple = DEFAULT.tee
     hole_idx: int = 0
+    stage: int = 0
+    n_stages: int = 1
     strokes: int = 0
     score: int = 0
     phase: Phase = Phase.AIMING

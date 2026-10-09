@@ -35,12 +35,40 @@ def _bowl_barrier(cfg, X, Y):
     return _bowl(cfg, X, Y) + _barrier(cfg, X, Y)
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+X2Y2_CAP = 250.0
+X2Y2_XY = 9.0 / 16**2
+
+
+def _x2y2(cfg, X, Y):
+    c = cfg.L / 2
+    return X2Y2_CAP * np.minimum(1.0, ((X - c) * (Y - c) / (X2Y2_XY * cfg.L**2)) ** 2)
+
+
 PRESETS = {
     "flat": _flat,
     "bowl": _bowl,
     "barrier": _barrier,
     "double_well": _double_well,
     "bowl_barrier": _bowl_barrier,
+    "x2y2": _x2y2,
 }
 
 
@@ -55,7 +83,7 @@ def _boundary_wall(cfg, X, Y):
 
     edge = cfg.L / cfg.grid_n
     d = np.minimum.reduce([X, Y, cfg.L - X - edge, cfg.L - Y - edge])
-    return 110.0 * np.exp(-d / (2 * cfg.L / cfg.grid_n))
+    return 110.0 * np.exp(-d / (cfg.L / 8))
 
 
 def hole_region(cfg, hole_idx):
@@ -67,9 +95,13 @@ def _hole_dip(cfg, hole_idx, X, Y):
     cj, ck, _ = hole_region(cfg, hole_idx)
     dx = cfg.L / cfg.grid_n
     cx, cy = cj * dx, ck * dx
-    width = 2.0 * dx
+    width = cfg.L / 8
 
     return -150.0 * np.exp(-((X - cx) ** 2 + (Y - cy) ** 2) / (2 * width**2))
+
+
+def terrain_top(cfg):
+    return X2Y2_CAP if cfg.potential_preset == "x2y2" else None
 
 
 def build_potential(cfg, hole_idx):
@@ -90,16 +122,21 @@ def assert_no_overlap(cfg):
         assert dist > cfg.r_hole, f"burrow {(cj, ck)} overlaps detector rect"
 
 
-def pick_detector_cells(cfg, rng, lie, n_points=None):
+def pick_detector_cells(cfg, rng, lie, n_points=None, avoid=()):
     n = cfg.detector_n_points if n_points is None else n_points
-    N = cfg.grid_n
+    N, t = cfg.grid_n, cfg.detector_tile
     r2 = cfg.r_hole ** 2
-    centers = list(cfg.burrows) + [tuple(lie)]
+    centers = list(cfg.burrows) + [tuple(lie)] + [tuple(a) for a in avoid]
 
-    def ok(j, k):
-        return all((j - cj) ** 2 + (k - ck) ** 2 > r2 for (cj, ck) in centers)
+    def clear(j, k):
+        return all(
+            (jj - cj) ** 2 + (kk - ck) ** 2 > r2
+            for jj in range(j, j + t)
+            for kk in range(k, k + t)
+            for (cj, ck) in centers
+        )
 
-    cells = [(j, k) for j in range(N) for k in range(N) if ok(j, k)]
-    n = min(n, len(cells))
-    picks = rng.choice(len(cells), size=n, replace=False)
-    return tuple(cells[int(i)] for i in picks)
+    tiles = [(j, k) for j in range(0, N, t) for k in range(0, N, t) if clear(j, k)]
+    n = min(n, len(tiles))
+    picks = rng.choice(len(tiles), size=n, replace=False)
+    return tuple(tiles[int(i)] for i in picks)

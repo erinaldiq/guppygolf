@@ -116,8 +116,8 @@ def detector_flip_q(reg, conditions, flag, anc):
         x(reg[idx])
 
 
-def point_conditions(cells, n):
-    return [dyadic_conditions(j, j, k, k, n) for (j, k) in cells]
+def point_conditions(cells, n, tile=1):
+    return [dyadic_conditions(j, j + tile - 1, k, k + tile - 1, n) for (j, k) in cells]
 
 
 def detector_flip_box(reg, tiles, flag, anc):

@@ -1,7 +1,7 @@
 import sys
 
 import pyglet
-from config import DEFAULT
+from config import ROUND
 from game.loop import Loop
 from render.window import GolfWindow
 
@@ -13,8 +13,8 @@ def main():
 
 
     sys.setswitchinterval(0.0005)
-    cfg = DEFAULT
-    loop = Loop(cfg)
+    cfg = ROUND[0]
+    loop = Loop(cfg, courses=ROUND)
     win = GolfWindow(cfg, loop)
     pyglet.app.run()
 
